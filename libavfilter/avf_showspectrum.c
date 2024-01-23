@@ -738,9 +738,21 @@ static float inv_log_scale(float bin,
     return (min * exp2f((bin * (log2f(max) - log2f(20.f))) / bmax) + min) * bmax / max;
 }
 
+static float inv_mel_scale(float bin,
+                           float bmin, float bmax,
+                           float min, float max)
+{
+    return (min * inv_mel((bin * (mel(max) - mel(20.f))) / bmax) + min) * bmax / max;
+}
+
 static float bin_pos(const int bin, const int num_bins, const float min, const float max)
 {
     return inv_log_scale(bin, 0.f, num_bins, 20.f, max - min);
+}
+
+static float mel_bin_pos(const int bin, const int num_bins, const float min, const float max)
+{
+    return inv_mel_scale(bin, 0.f, num_bins, 20.f, max - min);
 }
 
 static float get_scale(AVFilterContext *ctx, int scale, float a)
@@ -1092,7 +1104,6 @@ static int plot_channel_log(AVFilterContext *ctx, void *arg, int jobnr, int nb_j
     return 0;
 }
 
-//TODO
 static int plot_channel_mel(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
 {
     ShowSpectrumContext *s = ctx->priv;
@@ -1107,7 +1118,7 @@ static int plot_channel_mel(AVFilterContext *ctx, void *arg, int jobnr, int nb_j
     /* draw the channel */
     for (int yy = 0; yy < h; yy++) {
         float range = s->stop ? s->stop - s->start : inlink->sample_rate / 2;
-        float pos = bin_pos(yy, h, s->start, s->start + range);
+        float pos = mel_bin_pos(yy, h, s->start, s->start + range);
         float delta = pos - floorf(pos);
         float a0, a1;
 
