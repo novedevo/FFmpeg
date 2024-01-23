@@ -699,16 +699,6 @@ static float mel_scale(const float bin, const float bmax,
     return inv_mel(((bin - bmin) / (bmax - bmin)) * (mel(max) - mel(min)) + mel(min));
 }
 
-/*range: if stop == 0 {sample_rate / 2} else {stop - start}*/
-/*inputs (all ints): x or y, w or h, start, start + range, fscale*/
-/*output: hertz*/
-/*if hertz is zero, that's DC*/
-/*only used for the legend*/
-
-/* so, the bin is how many pixels from the bottom of the image we are,
-the bmax is how many pixels tall the image is,
-the min is 0 ig or whatever the lowest possible frequency is,
-and the max is 22000*/
 static float get_hz(const float bin, const float bmax,
                     const float min, const float max,
                     int fscale)
