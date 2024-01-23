@@ -49,7 +49,7 @@
 
 enum DisplayMode  { COMBINED, SEPARATE, NB_MODES };
 enum DataMode     { D_MAGNITUDE, D_PHASE, D_UPHASE, NB_DMODES };
-enum FrequencyScale { F_LINEAR, F_LOG, NB_FSCALES };
+enum FrequencyScale { F_LINEAR, F_LOG, F_MEL, NB_FSCALES };
 enum DisplayScale { LINEAR, SQRT, CBRT, LOG, FOURTHRT, FIFTHRT, NB_SCALES };
 enum ColorMode    { CHANNEL, INTENSITY, RAINBOW, MORELAND, NEBULAE, FIRE, FIERY, FRUIT, COOL, MAGMA, GREEN, VIRIDIS, PLASMA, CIVIDIS, TERRAIN, NB_CLMODES };
 enum SlideMode    { REPLACE, SCROLL, FULLFRAME, RSCROLL, LREPLACE, NB_SLIDES };
@@ -160,6 +160,7 @@ static const AVOption showspectrum_options[] = {
     { "fscale", "set frequency scale", OFFSET(fscale), AV_OPT_TYPE_INT, {.i64=F_LINEAR}, 0, NB_FSCALES-1, FLAGS, "fscale" },
         { "lin",  "linear",      0, AV_OPT_TYPE_CONST, {.i64=F_LINEAR}, 0, 0, FLAGS, "fscale" },
         { "log",  "logarithmic", 0, AV_OPT_TYPE_CONST, {.i64=F_LOG},    0, 0, FLAGS, "fscale" },
+        { "mel",  "mel",         0, AV_OPT_TYPE_CONST, {.i64=F_MEL},    0, 0, FLAGS, "fscale" },
     { "saturation", "color saturation multiplier", OFFSET(saturation), AV_OPT_TYPE_FLOAT, {.dbl = 1}, -10, 10, FLAGS },
     WIN_FUNC_OPTION("win_func", OFFSET(win_func), FLAGS, WFUNC_HANNING),
     { "orientation", "set orientation", OFFSET(orientation), AV_OPT_TYPE_INT, {.i64=VERTICAL}, 0, NB_ORIENTATIONS-1, FLAGS, "orientation" },
@@ -676,13 +677,44 @@ static char *get_time(AVFilterContext *ctx, float seconds, int x)
     return units;
 }
 
-static float log_scale(const float bin,
-                       const float bmin, const float bmax,
-                       const float min, const float max)
+static float log_scale(const float bin, const float bmax,
+                       const float max)
 {
-    return exp2f(((bin - bmin) / (bmax - bmin)) * (log2f(max) - log2f(min)) + log2f(min));
+    const float min = 20.f;
+    const float ratio = bin / bmax;
+    const float log_range = log2f(max) - log2f(min);
+    return exp2f(ratio * log_range + log2f(min));
 }
 
+static float mel(const float f)
+{
+    return 1000.f * log2f(1.f + f / 1000.f);
+}
+
+static float inv_mel(const float m)
+{
+    return 1000.f * exp2f(m / 1000.f - 1.f)
+}
+
+static float mel_scale(const float bin, const float bmax,
+                       const float max)
+{
+    const float min = 20.f;
+    const float ratio = bin / bmax;
+    const float mel_range = mel(max) - mel(min);
+    return inv_mel(ratio * mel_range + mel(min));
+}
+
+/*range: if stop == 0 {sample_rate / 2} else {stop - start}*/
+/*inputs (all ints): x or y, w or h, start, start + range, fscale*/
+/*output: hertz*/
+/*if hertz is zero, that's DC*/
+/*only used for the legend*/
+
+/* so, the bin is how many pixels from the bottom of the image we are,
+the bmax is how many pixels tall the image is,
+the min is 0 ig or whatever the lowest possible frequency is,
+and the max is 22000*/
 static float get_hz(const float bin, const float bmax,
                     const float min, const float max,
                     int fscale)
@@ -691,7 +723,9 @@ static float get_hz(const float bin, const float bmax,
     case F_LINEAR:
         return min + (bin / bmax) * (max - min);
     case F_LOG:
-        return min + log_scale(bin, 0, bmax, 20.f, max - min);
+        return min + log_scale(bin, bmax, max - min);
+    case F_MEL:
+        return min + mel_scale(bin, bmax, max - min);
     default:
         return 0.f;
     }
@@ -1058,6 +1092,38 @@ static int plot_channel_log(AVFilterContext *ctx, void *arg, int jobnr, int nb_j
     return 0;
 }
 
+//TODO
+static int plot_channel_mel(AVFilterContext *ctx, void *arg, int jobnr, int nb_jobs)
+{
+    ShowSpectrumContext *s = ctx->priv;
+    AVFilterLink *inlink = ctx->inputs[0];
+    const int h = s->orientation == VERTICAL ? s->channel_height : s->channel_width;
+    const int ch = jobnr;
+    float yf, uf, vf;
+
+    /* decide color range */
+    color_range(s, ch, &yf, &uf, &vf);
+
+    /* draw the channel */
+    for (int yy = 0; yy < h; yy++) {
+        float range = s->stop ? s->stop - s->start : inlink->sample_rate / 2;
+        float pos = bin_pos(yy, h, s->start, s->start + range);
+        float delta = pos - floorf(pos);
+        float a0, a1;
+
+        a0 = get_value(ctx, ch, av_clip(pos, 0, h-1));
+        a1 = get_value(ctx, ch, av_clip(pos+1, 0, h-1));
+        {
+            int row = (s->mode == COMBINED) ? yy : ch * h + yy;
+            float *out = &s->color_buffer[ch][4 * row];
+
+            pick_color(s, yf, uf, vf, delta * a1 + (1.f - delta) * a0, out);
+        }
+    }
+
+    return 0;
+}
+
 static int config_output(AVFilterLink *outlink)
 {
     AVFilterContext *ctx = outlink->src;
@@ -1073,6 +1139,7 @@ static int config_output(AVFilterLink *outlink)
     switch (s->fscale) {
     case F_LINEAR: s->plot_channel = plot_channel_lin; break;
     case F_LOG:    s->plot_channel = plot_channel_log; break;
+    case F_MEL:    s->plot_channel = plot_channel_mel; break;
     default: return AVERROR_BUG;
     }
 
@@ -1736,6 +1803,7 @@ static const AVOption showspectrumpic_options[] = {
     { "fscale", "set frequency scale", OFFSET(fscale), AV_OPT_TYPE_INT, {.i64=F_LINEAR}, 0, NB_FSCALES-1, FLAGS, "fscale" },
         { "lin",  "linear",      0, AV_OPT_TYPE_CONST, {.i64=F_LINEAR}, 0, 0, FLAGS, "fscale" },
         { "log",  "logarithmic", 0, AV_OPT_TYPE_CONST, {.i64=F_LOG},    0, 0, FLAGS, "fscale" },
+        { "mel",  "mel",         0, AV_OPT_TYPE_CONST, {.i64=F_MEL},    0, 0, FLAGS, "fscale" },
     { "saturation", "color saturation multiplier", OFFSET(saturation), AV_OPT_TYPE_FLOAT, {.dbl = 1}, -10, 10, FLAGS },
     WIN_FUNC_OPTION("win_func", OFFSET(win_func), FLAGS, WFUNC_HANNING),
     { "orientation", "set orientation", OFFSET(orientation), AV_OPT_TYPE_INT, {.i64=VERTICAL}, 0, NB_ORIENTATIONS-1, FLAGS, "orientation" },
