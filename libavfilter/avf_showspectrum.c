@@ -680,10 +680,7 @@ static char *get_time(AVFilterContext *ctx, float seconds, int x)
 static float log_scale(const float bin, const float bmax,
                        const float max)
 {
-    const float min = 20.f;
-    const float ratio = bin / bmax;
-    const float log_range = log2f(max) - log2f(min);
-    return exp2f(ratio * log_range + log2f(min));
+    return exp2f(((bin - bmin) / (bmax - bmin)) * (log2f(max) - log2f(min)) + log2f(min));
 }
 
 static float mel(const float f)
@@ -699,10 +696,7 @@ static float inv_mel(const float m)
 static float mel_scale(const float bin, const float bmax,
                        const float max)
 {
-    const float min = 20.f;
-    const float ratio = bin / bmax;
-    const float mel_range = mel(max) - mel(min);
-    return inv_mel(ratio * mel_range + mel(min));
+    return inv_mel(((bin - bmin) / (bmax - bmin)) * (mel(max) - mel(min)) + mel(min));
 }
 
 /*range: if stop == 0 {sample_rate / 2} else {stop - start}*/
